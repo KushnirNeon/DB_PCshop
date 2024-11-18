@@ -1,0 +1,173 @@
+const express = require('express');
+const { Pool } = require('pg');
+const mongoose = require('mongoose');
+const Decimal = require('decimal.js');
+
+const app = express();
+const port = 3000;
+
+app.use(express.json());
+
+const pgConfig = {
+    user: 'postgres',
+    host: 'localhost',
+    database: 'Lab2_DB',
+    password: '2424',
+    port: 5432,
+};
+const pool = new Pool(pgConfig);
+
+const mongoURI = 'mongodb://localhost:27017/test';
+mongoose.connect(mongoURI);
+
+const inventorySchema = new mongoose.Schema({
+    computer: {
+        computer_id: { type: Number, required: true },
+        model_name: { type: String, required: true },
+        price: { type: Decimal, required: true },
+        created_at: { type: Date, required: true },
+        updated_at: { type: Date, required: true },
+        updated_by: { type: Number, required: true },
+        deleted_at: { type: Date, required: false },
+    },
+    quantity: { type: Number, required: true },
+    updated_at: { type: Date, required: true },
+    updated_by: { type: Number, required: true },
+});
+
+const Inventory = mongoose.model('Inventory', inventorySchema, 'inventory');
+
+app.post('/post10000Items', async (req, res) => {
+    const { computer_id, model_name, price, quantity, updated_by } = req.body;
+    const mongoItems = [];
+
+    const startTimePG = Date.now();
+    for (let i = 1; i <= 10000; i++) {
+        const itemName = `${model_name}_${i}`;
+        const now = new Date();
+
+        await pool.query(
+            `INSERT INTO "computer" (computer_id, model_name, price, created_at, updated_at, updated_by)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (computer_id) DO UPDATE
+            SET model_name = EXCLUDED.model_name, price = EXCLUDED.price, updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by`,
+            [computer_id + i, itemName, price, now, now, updated_by]
+        );
+
+        await pool.query(
+            `INSERT INTO "inventory" (computer_id, quantity, updated_at, updated_by)
+            VALUES ($1, $2, $3, $4)`,
+            [computer_id + i, quantity, now, updated_by]
+        );
+
+        mongoItems.push({
+            computer: {
+                computer_id: computer_id + i,
+                model_name: itemName,
+                price,
+                created_at: now,
+                updated_at: now,
+                updated_by,
+                deleted_at: null,
+            },
+            quantity,
+            updated_at: now,
+            updated_by,
+        });
+    }
+    const endTimePG = Date.now();
+
+    const startTimeMongo = Date.now();
+    await Inventory.insertMany(mongoItems);
+    const endTimeMongo = Date.now();
+
+    const response = {
+        pgTime: endTimePG - startTimePG,
+        mongoTime: endTimeMongo - startTimeMongo
+    };
+
+    console.log(`PostgreSQL execution time for adding 10,000 items: ${endTimePG - startTimePG} ms`);
+    console.log(`MongoDB execution time for adding 10,000 items: ${endTimeMongo - startTimeMongo} ms`);
+    res.json(response);
+});
+
+app.get('/getFirst10000Items', async (req, res) => {
+    const startTimePG = Date.now();
+    
+    const pgResult = await pool.query(`
+        SELECT 
+            i.inventory_id,
+            i.computer_id,
+            c.model_name,
+            c.price,
+            i.quantity,
+            i.updated_at,
+            i.updated_by
+        FROM "inventory" i
+        JOIN "computer" c ON i.computer_id = c.computer_id
+        LIMIT 10000
+    `);
+
+    const endTimePG = Date.now();
+
+    const startTimeMongo = Date.now();
+    const mongoResult = await Inventory.find().limit(10000);
+    const endTimeMongo = Date.now();
+
+    const response = {
+        pgTime: endTimePG - startTimePG,
+        mongoTime: endTimeMongo - startTimeMongo,
+        pgResult: pgResult.rows,
+        mongoResult,
+    };
+
+    console.log(`PostgreSQL execution time for getting first 10,000 items: ${endTimePG - startTimePG} ms`);
+    console.log(`MongoDB execution time for getting first 10,000 items: ${endTimeMongo - startTimeMongo} ms`);
+    res.json(response);
+});
+
+app.put('/updateAllItems', async (req, res) => {
+    try {
+        const now = new Date();
+
+        const startTimePG = Date.now();
+        await pool.query(
+            `UPDATE "computer"
+            SET model_name = CONCAT(model_name, ' updated'), updated_at = $1, updated_by = $2
+            WHERE computer_id IS NOT NULL`,
+            [now, 1]
+        );
+        const endTimePG = Date.now();
+
+        const startTimeMongo = Date.now();
+        const mongoResult = await Inventory.updateMany(
+            {},
+            [
+                {
+                    $set: {
+                        'computer.model_name': { $concat: ['$computer.model_name', ' updated'] },
+                        updated_at: now,
+                        updated_by: 1,
+                    },
+                },
+            ]
+        );
+        const endTimeMongo = Date.now();
+
+        const response = {
+            pgTime: endTimePG - startTimePG,
+            mongoTime: endTimeMongo - startTimeMongo,
+        };
+
+        console.log(`PostgreSQL execution time for updating all items: ${endTimePG - startTimePG} ms`);
+        console.log(`MongoDB execution time for updating all items: ${endTimeMongo - startTimeMongo} ms`);
+        res.json(response);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Error updating items', error });
+    }
+});
+
+app.listen(port, () => {
+    console.log(`Server is running at http://localhost:${port}`);
+});
