@@ -1,0 +1,77 @@
+const express = require('express');
+const { Pool } = require('pg');
+const mongoose = require('mongoose');
+
+const app = express();
+const port = 3000;
+
+app.use(express.json());
+
+const pgConfig = {
+    user: 'postgres',
+    host: 'localhost',
+    database: 'Lab2_DB',
+    password: '2424',
+    port: 5432,
+};
+const pool = new Pool(pgConfig);
+
+const mongoURI = 'mongodb://localhost:27017/shop';
+mongoose.connect(mongoURI);
+
+const inventorySchema = new mongoose.Schema({
+    computer: {
+        computer_id: { type: Number, required: true },
+        model_name: { type: String, required: true },
+        price: { type: Number, required: true },
+        created_at: { type: Date, required: true },
+        updated_at: { type: Date, required: true },
+        updated_by: { type: Number, required: true },
+        deleted_at: { type: Date, default: null },
+    },
+    quantity: { type: Number, required: true },
+    updated_at: { type: Date, required: true },
+    updated_by: { type: Number, required: true },
+});
+
+const InventoryMongo = mongoose.model('Inventory', inventorySchema, 'inventory');
+
+const transferData = async () => {
+    try {
+        const startTime = Date.now();
+
+        const result = await pool.query(`
+            SELECT c.computer_id, c.model_name, c.price, c.created_at, c.updated_at, c.updated_by, c.deleted_at,
+                   i.quantity
+            FROM "computer" c
+            JOIN "inventory" i ON c.computer_id = i.computer_id;
+        `);
+
+        const inventoryItems = result.rows.map(row => ({
+            computer: {
+                computer_id: row.computer_id,
+                model_name: row.model_name,
+                price: row.price,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                updated_by: row.updated_by,
+                deleted_at: row.deleted_at,
+            },
+            quantity: row.quantity,
+            updated_at: row.updated_at,
+            updated_by: row.updated_by,
+        }));
+
+        await InventoryMongo.insertMany(inventoryItems);
+
+        const endTime = Date.now();
+        console.log(`Data transfer was successfully completed. Duration: ${endTime - startTime} ms`);
+    } catch (error) {
+        console.error('Error during data transfer:', error);
+    } finally {
+        await mongoose.disconnect();
+        await pool.end();
+    }
+};
+
+transferData();
